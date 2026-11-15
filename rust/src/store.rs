@@ -1,4 +1,5 @@
-//! store — PinIt's state in %LOCALAPPDATA%\PinIt\pinned.json.
+// Modified for TackHere by jwlrxy (2026).
+//! store — TackHere's state in %LOCALAPPDATA%\TackHere\pinned.json.
 //!
 //! The same file and schema the Tauri and Qt builds use, so an existing
 //! install's pins and settings carry straight over. Keys this build doesn't
@@ -27,8 +28,8 @@ pub struct SavedPin {
     pub opacity: i32,
     #[serde(default)]
     pub click_through: bool,
-    // What the window looked like before PinIt first touched it, so re-pinning
-    // after a crash doesn't mistake PinIt's own changes for the app's.
+    // What the window looked like before TackHere first touched it, so re-pinning
+    // after a crash doesn't mistake TackHere's own changes for the app's.
     // Default true = "unknown, trust the window", right for older files.
     #[serde(default = "yes")]
     pub was_layered: bool,
@@ -75,7 +76,7 @@ impl Default for Shortcuts {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    pub enable_sound: bool,
+    pub stay_on_top: bool,
     pub show_notifications: bool,
     pub has_seen_tray_notice: bool,
     pub start_with_windows: bool,
@@ -87,7 +88,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            enable_sound: true,
+            stay_on_top: false,
             show_notifications: false,
             has_seen_tray_notice: false,
             start_with_windows: false,
@@ -137,11 +138,11 @@ mod pin_map {
     }
 }
 
-/// %LOCALAPPDATA%\PinIt — pinned.json and pinit.log. (PinIt-dev for a
+/// %LOCALAPPDATA%\TackHere — pinned.json and tackhere.log. (TackHere-dev for a
 /// development build, so it never touches an installed copy's pins.)
 pub fn data_dir() -> PathBuf {
     let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-    base.join(format!("PinIt{}", crate::instance_suffix()))
+    base.join(format!("TackHere{}", crate::instance_suffix()))
 }
 
 fn file() -> PathBuf {
@@ -195,7 +196,6 @@ mod tests {
         assert!(state.pins[0].click_through);
         assert!(!state.pins[0].was_layered);
         assert!(state.pins[1].was_layered, "missing flags default to true");
-        assert!(!state.settings.enable_sound);
         assert_eq!(state.settings.shortcuts.toggle_pin, "alt+KeyQ");
         assert_eq!(state.settings.shortcuts.toggle_window, "super+ctrl+KeyP");
 
@@ -209,7 +209,6 @@ mod tests {
     fn empty_or_broken_files_give_defaults() {
         let state: State = serde_json::from_str("{}").unwrap();
         assert!(state.pins.is_empty());
-        assert!(state.settings.enable_sound);
         assert!(serde_json::from_str::<State>("not json").is_err());
     }
 

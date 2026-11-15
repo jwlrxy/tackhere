@@ -1,4 +1,5 @@
-//! autostart — "Start PinIt with Windows", kept where Windows itself reads
+// Modified for TackHere by jwlrxy (2026).
+//! autostart — "Start TackHere with Windows", kept where Windows itself reads
 //! it: the per-user Run key. The registry is the single source of truth (the
 //! installer can switch autostart on too, so a flag in pinned.json would
 //! drift out of step).
@@ -9,7 +10,7 @@ use windows::Win32::System::Registry::{
 use windows::core::{w, HSTRING};
 
 fn value_name() -> HSTRING {
-    HSTRING::from(format!("PinIt{}", crate::instance_suffix()))
+    HSTRING::from(format!("TackHere{}", crate::instance_suffix()))
 }
 
 const RUN_KEY: windows::core::PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");

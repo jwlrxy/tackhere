@@ -1,3 +1,4 @@
+// Modified for TackHere by jwlrxy (2026).
 use std::path::{Path, PathBuf};
 
 fn main() {
@@ -16,6 +17,8 @@ fn main() {
         .replace("@VERSION@", env!("CARGO_PKG_VERSION"))
         .replace("@VERSION_NUMERIC@", &format!("{numeric},0"))
         .replace("@ICON@", &rc_path(&dir.join("../resources/icon.ico")))
+        .replace("@PIN_CURSOR@", &rc_path(&dir.join("../resources/pin-pointer.cur")))
+        .replace("@UNPIN_CURSOR@", &rc_path(&dir.join("../resources/unpin-pointer.cur")))
         .replace("@MANIFEST@", &rc_path(&dir.join("pinit.manifest")));
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("app.rc");
     std::fs::write(&out, rc).unwrap();
@@ -23,5 +26,7 @@ fn main() {
     println!("cargo:rerun-if-changed=app.rc");
     println!("cargo:rerun-if-changed=pinit.manifest");
     println!("cargo:rerun-if-changed=../resources/icon.ico");
+    println!("cargo:rerun-if-changed=../resources/pin-pointer.cur");
+    println!("cargo:rerun-if-changed=../resources/unpin-pointer.cur");
     embed_resource::compile(&out, embed_resource::NONE).manifest_optional().unwrap();
 }

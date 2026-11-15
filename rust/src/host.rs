@@ -1,4 +1,5 @@
-//! host — PinIt's hidden helper window and everything that needs one.
+// Modified for TackHere by jwlrxy (2026).
+//! host — TackHere's hidden helper window and everything that needs one.
 //!
 //! One hidden top-level window on the UI thread receives what Windows sends
 //! to an app rather than to a visible window: global hotkeys, the tray icon's
@@ -10,6 +11,9 @@
 //! It must be top-level, not message-only: message-only windows never see the
 //! WM_QUERYENDSESSION broadcast.
 
+pub mod markers;
+mod pointer_picker;
+
 use std::cell::RefCell;
 use std::mem::size_of;
 
@@ -20,7 +24,7 @@ use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVE
 use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_NOREPEAT};
 use windows::Win32::UI::Shell::{
     ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_NOSOUND, NIIF_USER,
-    NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NOTIFYICONDATAW, NOTIFYICON_VERSION_4,
+    NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NIN_SELECT, NOTIFYICONDATAW, NOTIFYICON_VERSION_4,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{w, HSTRING, PCWSTR};
@@ -31,7 +35,9 @@ use crate::win::Hwnd;
 #[derive(Clone, Copy, Debug)]
 pub enum Event {
     Hotkey(i32),
-    TrayActivate,
+    WindowPicked(Hwnd),
+    PickerEnded,
+    MarkerClicked(Hwnd),
     TrayMenu { x: i32, y: i32 },
     ShowRequested,
     ForegroundChanged,
@@ -43,6 +49,7 @@ pub enum Event {
 const WM_TRAY: u32 = WM_APP + 1;
 const WM_SHOW_REQUEST: u32 = WM_APP + 2;
 const TRAY_ID: u32 = 1;
+const NIN_KEYSELECT: u32 = NIN_SELECT | 1;
 
 thread_local! {
     static HANDLER: RefCell<Option<Box<dyn Fn(Event)>>> = const { RefCell::new(None) };
@@ -84,6 +91,9 @@ fn emit(event: Event, now: bool) {
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
         match msg {
+            WM_HOTKEY if wp.0 as i32 == pointer_picker::CANCEL_HOTKEY => {
+                pointer_picker::cancel();
+            }
             WM_HOTKEY => emit(Event::Hotkey(wp.0 as i32), false),
             WM_TRAY => {
                 // NOTIFYICON_VERSION_4: the event is in LOWORD(lParam), the
@@ -92,7 +102,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 let (x, y) = ((wp.0 & 0xffff) as i16 as i32, ((wp.0 >> 16) & 0xffff) as i16 as i32);
                 match event {
                     WM_CONTEXTMENU => emit(Event::TrayMenu { x, y }, false),
-                    0x400 /* NIN_SELECT */ | 0x401 /* NIN_KEYSELECT */ => emit(Event::TrayActivate, false),
+                    NIN_SELECT | WM_LBUTTONUP => begin_pointer_pick(),
+                    NIN_KEYSELECT => emit(Event::ShowRequested, false),
                     _ => {}
                 }
             }
@@ -116,13 +127,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
 }
 
 fn class_name() -> HSTRING {
-    HSTRING::from(format!("PinItHost{}", crate::instance_suffix()))
+    HSTRING::from(format!("TackHereHost{}", crate::instance_suffix()))
 }
 
-/// Another PinIt is already running in this session: ask it to show itself.
+/// Another TackHere is already running in this session: ask it to show itself.
 /// Returns true if this process should exit.
 pub fn hand_off_to_running_instance() -> bool {
-    let name = HSTRING::from(format!("PinIt_SingleInstance_v2{}", crate::instance_suffix()));
+    let name = HSTRING::from(format!("TackHere_SingleInstance_v2{}", crate::instance_suffix()));
     unsafe {
         // Kept for the life of the process; the installer uses it as AppMutex.
         let mutex: windows::core::Result<HANDLE> = CreateMutexW(None, false, &name);
@@ -155,7 +166,7 @@ pub fn create(handler: impl Fn(Event) + 'static) -> Hwnd {
         let hwnd = CreateWindowExW(
             WS_EX_TOOLWINDOW,
             &class,
-            w!("PinIt"),
+            w!("TackHere"),
             WS_OVERLAPPED,
             0,
             0,
@@ -166,7 +177,7 @@ pub fn create(handler: impl Fn(Event) + 'static) -> Hwnd {
             Some(instance.into()),
             None,
         )
-        .expect("could not create PinIt's helper window");
+        .expect("could not create TackHere's helper window");
         HOST.with(|h| *h.borrow_mut() = hwnd);
         TASKBAR_CREATED.with(|t| *t.borrow_mut() = RegisterWindowMessageW(w!("TaskbarCreated")));
         hwnd.0 as Hwnd
@@ -305,7 +316,19 @@ pub fn notify(title: &str, message: &str) {
     }
 }
 
+pub fn begin_pointer_pick() {
+    if let Err(error) = pointer_picker::begin() {
+        crate::logfile::warning!("Could not start pointer picking: {error}");
+        notify("TackHere", "Could not start window picking.");
+    }
+}
+
+pub fn pointer_pick_active() -> bool {
+    pointer_picker::is_active()
+}
+
 pub fn remove_tray() {
+    pointer_picker::cancel();
     let data = tray_data();
     unsafe {
         let _ = Shell_NotifyIconW(NIM_DELETE, &data);

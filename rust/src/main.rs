@@ -1,4 +1,5 @@
-//! PinIt — keep any window always on top on Windows.
+// Modified for TackHere by jwlrxy (2026).
+//! TackHere — keep any window always on top on Windows.
 //!
 //! main wires the pieces together: the Slint window (ui/app.slint), the pin
 //! bookkeeping (pins), the hidden helper window that owns the tray icon and
@@ -7,7 +8,6 @@
 #![windows_subsystem = "windows"]
 
 mod autostart;
-mod flash;
 mod host;
 mod logfile;
 mod pins;
@@ -28,12 +28,12 @@ use crate::win::Hwnd;
 
 slint::include_modules!();
 
-/// "-dev" when PINIT_DEV is set: a development build then uses its own data
+/// "-dev" when TACKHERE_DEV is set: a development build then uses its own data
 /// folder, Run-key value and single-instance lock, so it can run next to an
-/// installed PinIt without touching it.
+/// installed TackHere without touching it.
 pub fn instance_suffix() -> &'static str {
     static SUFFIX: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
-    SUFFIX.get_or_init(|| if std::env::var_os("PINIT_DEV").is_some_and(|v| !v.is_empty()) { "-dev" } else { "" })
+    SUFFIX.get_or_init(|| if std::env::var_os("TACKHERE_DEV").is_some_and(|v| !v.is_empty()) { "-dev" } else { "" })
 }
 
 const HOTKEY_PIN: i32 = 1;
@@ -77,14 +77,14 @@ type Shared = Rc<RefCell<App>>;
 
 fn main() {
     logfile::init();
-    logfile::info!("PinIt {} starting", env!("CARGO_PKG_VERSION"));
+    logfile::info!("TackHere {} starting", env!("CARGO_PKG_VERSION"));
     if host::hand_off_to_running_instance() {
         logfile::info!("Another instance is running; asked it to show");
         return;
     }
     let start_hidden = std::env::args().any(|a| a == "--minimized");
 
-    let ui = AppWindow::new().expect("could not create the PinIt window");
+    let ui = AppWindow::new().expect("could not create the TackHere window");
     let state = store::load();
     let app: Shared = Rc::new_cyclic(|me| RefCell::new(App {
         me: me.clone(),
@@ -114,8 +114,8 @@ fn main() {
         )));
         ui.set_version(env!("CARGO_PKG_VERSION").into());
         ui.set_animations(win::animations_enabled());
-        ui.set_sound(a.state.settings.enable_sound);
         ui.set_notifications(a.state.settings.show_notifications);
+        ui.set_stay_on_top(a.state.settings.stay_on_top);
         ui.set_autostart(autostart::is_enabled());
     }
 
@@ -123,7 +123,7 @@ fn main() {
         let app = app.clone();
         host::create(move |event| on_host_event(&app, event));
     }
-    host::add_tray("PinIt");
+    host::add_tray("TackHere");
 
     let shortcuts = app.borrow().state.settings.shortcuts.clone();
     let failed = apply_shortcuts(&shortcuts);
@@ -150,11 +150,11 @@ fn main() {
         ui.window().on_close_requested(move || {
             let mut a = app.borrow_mut();
             a.visible = false;
-            flash::hide();
+            a.watch_window_order();
             if !a.state.settings.has_seen_tray_notice {
                 a.state.settings.has_seen_tray_notice = true;
                 a.save_now();
-                host::notify("PinIt is still running", "Your pins stay active. Find PinIt in the tray to open it again.");
+                host::notify("TackHere is still running", "Your pins stay active. Find TackHere in the tray to open it again.");
             }
             CloseRequestResponse::HideWindow
         });
@@ -168,6 +168,10 @@ fn main() {
 }
 
 fn connect_ui(ui: &AppWindow, app: &Shared) {
+    ui.on_begin_pointer_pick(host::begin_pointer_pick);
+    let a = app.clone();
+    ui.on_toggle_stay_on_top(move || a.borrow_mut().toggle_stay_on_top());
+
     let a = app.clone();
     ui.on_open_picker(move || a.borrow_mut().open_picker());
 
@@ -216,10 +220,7 @@ fn connect_ui(ui: &AppWindow, app: &Shared) {
     ui.on_unpin(move |i| {
         let mut app = a.borrow_mut();
         match app.rows.get(i as usize).copied() {
-            Some(RowKey::Live(hwnd)) => {
-                flash::hide();
-                app.toggle(hwnd, false);
-            }
+            Some(RowKey::Live(hwnd)) => app.toggle(hwnd, false),
             Some(RowKey::Waiting(p)) => {
                 app.pins.forget_pending(p);
                 app.save_now();
@@ -230,22 +231,12 @@ fn connect_ui(ui: &AppWindow, app: &Shared) {
     });
 
     let a = app.clone();
-    ui.on_row_hovered(move |i, hovered| {
-        let app = a.borrow();
-        match (hovered, app.rows.get(i as usize)) {
-            (true, Some(RowKey::Live(hwnd))) => flash::show(*hwnd, flash::Kind::Hover),
-            _ => flash::hide(),
-        }
-    });
-
-    let a = app.clone();
     ui.on_unpin_all(move || a.borrow_mut().unpin_all());
 
     let a = app.clone();
     ui.on_setting_changed(move |name, on| {
         let mut app = a.borrow_mut();
         match name.as_str() {
-            "sound" => app.state.settings.enable_sound = on,
             "notifications" => app.state.settings.show_notifications = on,
             "autostart" => {
                 if !autostart::set_enabled(on) {
@@ -327,12 +318,12 @@ fn on_host_event(app: &Shared, event: host::Event) {
             }
         }
         Hotkey(_) => {}
-        TrayActivate => {
+        WindowPicked(hwnd) => app.borrow_mut().toggle(hwnd, true),
+        PickerEnded => app.borrow_mut().reenforce(),
+        MarkerClicked(hwnd) => {
             let mut a = app.borrow_mut();
-            if a.visible {
-                a.hide_window();
-            } else {
-                a.show_window();
+            if a.pins.is_pinned(hwnd) {
+                a.toggle(hwnd, true);
             }
         }
         TrayMenu { x, y } => tray_menu(app, x, y),
@@ -348,6 +339,7 @@ fn on_host_event(app: &Shared, event: host::Event) {
             let mut a = app.borrow_mut();
             logfile::info!("Session ending: restored {} window(s), keeping pins for next login", a.pins.pinned().len());
             a.pins.release_all();
+            host::markers::clear();
             a.save_now();
             host::remove_tray();
         }
@@ -359,7 +351,7 @@ fn tray_menu(app: &Shared, x: i32, y: i32) {
     let (items, pinned): (Vec<host::MenuItem>, Vec<Hwnd>) = {
         let a = app.borrow();
         let mut items = vec![
-            host::MenuItem::Command { id: MENU_SHOW, text: "Show PinIt".into(), checked: false, enabled: true },
+            host::MenuItem::Command { id: MENU_SHOW, text: "Show TackHere".into(), checked: false, enabled: true },
             host::MenuItem::Separator,
         ];
         let pinned: Vec<Hwnd> = a.pins.pinned().iter().map(|p| p.hwnd).collect();
@@ -381,7 +373,7 @@ fn tray_menu(app: &Shared, x: i32, y: i32) {
             enabled: a.pins.is_active(),
         });
         items.push(host::MenuItem::Separator);
-        items.push(host::MenuItem::Command { id: MENU_QUIT, text: "Quit PinIt".into(), checked: false, enabled: true });
+        items.push(host::MenuItem::Command { id: MENU_QUIT, text: "Quit TackHere".into(), checked: false, enabled: true });
         (items, pinned)
     };
     let (x, y) = if x == 0 && y == 0 { host::cursor_pos() } else { (x, y) };
@@ -398,9 +390,9 @@ fn tray_menu(app: &Shared, x: i32, y: i32) {
         MENU_QUIT => {
             logfile::info!("Restored and cleared {} pinned window(s) on manual quit", a.pins.pinned().len());
             a.pins.release_all();
+            host::markers::clear();
             a.save_now();
             host::remove_tray();
-            flash::hide();
             let _ = slint::quit_event_loop();
         }
         id if id >= MENU_PINNED => {
@@ -420,7 +412,7 @@ fn apply_shortcuts(s: &store::Shortcuts) -> Vec<String> {
         (HOTKEY_PIN, &s.toggle_pin, "Pin / unpin window"),
         (HOTKEY_OPACITY_UP, &s.opacity_up, "Increase opacity"),
         (HOTKEY_OPACITY_DOWN, &s.opacity_down, "Decrease opacity"),
-        (HOTKEY_WINDOW, &s.toggle_window, "Show / hide PinIt"),
+        (HOTKEY_WINDOW, &s.toggle_window, "Show / hide TackHere"),
     ] {
         let ok = match shortcuts::parse(keys) {
             Some((mods, vk)) if shortcuts::has_safe_modifier(mods) => host::register_hotkey(id, mods, vk),
@@ -477,14 +469,57 @@ impl App {
         if let Some(hwnd) = self.main_hwnd() {
             win::force_foreground(hwnd);
         }
+        self.watch_window_order();
+        self.keep_panel_on_top();
     }
 
     fn hide_window(&mut self) {
-        flash::hide();
         if let Some(ui) = self.ui() {
             let _ = ui.hide();
         }
         self.visible = false;
+        self.watch_window_order();
+    }
+
+    fn watch_window_order(&self) {
+        host::watch_foreground(self.pins.is_active() || (self.visible && self.state.settings.stay_on_top));
+    }
+
+    fn panel_with_priority(&self) -> Option<Hwnd> {
+        (self.visible && self.state.settings.stay_on_top).then(|| self.main_hwnd()).flatten()
+    }
+
+    fn pin_ceiling(&self) -> Option<Hwnd> {
+        self.panel_with_priority().filter(|&hwnd| win::is_topmost(hwnd))
+    }
+
+    fn keep_panel_on_top(&self) {
+        if host::pointer_pick_active() {
+            return;
+        }
+        if let Some(hwnd) = self.panel_with_priority()
+            && (!win::is_topmost(hwnd) || win::visible_above(hwnd, |above| {
+                self.pins.is_pinned(above) || host::markers::is_marker(above)
+            }))
+        {
+            let _ = win::apply_topmost(hwnd, None);
+        }
+    }
+
+    fn toggle_stay_on_top(&mut self) {
+        let Some(hwnd) = self.main_hwnd() else { return };
+        let enabled = !self.state.settings.stay_on_top;
+        let applied = if enabled { win::apply_topmost(hwnd, None).is_ok() } else { win::remove_topmost(hwnd) };
+        if !applied || win::is_topmost(hwnd) != enabled {
+            self.toast("Couldn't change TackHere's topmost state.");
+            return;
+        }
+        self.state.settings.stay_on_top = enabled;
+        if let Some(ui) = self.ui() {
+            ui.set_stay_on_top(enabled);
+        }
+        self.watch_window_order();
+        self.save_now();
     }
 
     /// A short message: in the window while the user is looking at it, as a
@@ -495,7 +530,7 @@ impl App {
         if looking {
             self.toast(text);
         } else if important || self.state.settings.show_notifications {
-            host::notify("PinIt", text);
+            host::notify("TackHere", text);
         }
     }
 
@@ -508,20 +543,17 @@ impl App {
     }
 
     /// Pin or unpin `hwnd`. `from_hotkey`: the user is looking at that window,
-    /// not at PinIt.
+    /// not at TackHere.
     fn toggle(&mut self, hwnd: Hwnd, from_hotkey: bool) {
         let title = win::window_title(hwnd);
-        match self.pins.toggle(hwnd) {
+        let ceiling = self.pin_ceiling();
+        match self.pins.toggle(hwnd, ceiling) {
             Ok(pinned) => {
-                flash::show(hwnd, if pinned { flash::Kind::Pinned } else { flash::Kind::Unpinned });
-                if pinned && self.state.settings.enable_sound {
-                    win::play_pin_sound();
-                }
                 let verb = if pinned { "Pinned" } else { "Unpinned" };
                 let text = if title.is_empty() { verb.to_string() } else { format!("{verb}: {title}") };
                 if from_hotkey {
                     if self.state.settings.show_notifications {
-                        host::notify("PinIt", &text);
+                        host::notify("TackHere", &text);
                     }
                 } else {
                     self.toast(&text);
@@ -534,7 +566,6 @@ impl App {
     }
 
     fn unpin_all(&mut self) {
-        flash::hide();
         let n = self.pins.unpin_all();
         self.save_now();
         self.pins_changed();
@@ -546,9 +577,13 @@ impl App {
     }
 
     fn reenforce(&mut self) {
-        let r = self.pins.reenforce();
-        for &hwnd in &r.restored {
-            flash::show(hwnd, flash::Kind::Pinned);
+        if host::pointer_pick_active() {
+            return;
+        }
+        let ceiling = self.pin_ceiling();
+        let r = self.pins.reenforce(ceiling);
+        for &hwnd in &r.raised {
+            host::markers::raise_with_owner(hwnd, ceiling);
         }
         if r.list_changed {
             self.save_now();
@@ -557,6 +592,7 @@ impl App {
             self.save_soon();
             self.update_rows_in_place();
         }
+        self.keep_panel_on_top();
     }
 
     fn save_now(&mut self) {
@@ -579,6 +615,7 @@ impl App {
         let mut keys: Vec<RowKey> = self.pins.pinned().iter().map(|p| RowKey::Live(p.hwnd)).collect();
         keys.extend((0..self.pins.pending().len()).map(RowKey::Waiting));
         let live: Vec<Hwnd> = self.pins.pinned().iter().map(|p| p.hwnd).collect();
+        host::markers::sync(&live, self.pin_ceiling());
         self.icons.retain(|h, _| live.contains(h));
         for &h in &live {
             self.icons.entry(h).or_insert_with(|| win::window_icon_rgba(h, ICON_PX).map(|px| to_image(px, ICON_PX)));
@@ -597,7 +634,8 @@ impl App {
         }
 
         let active = self.pins.is_active();
-        host::watch_foreground(active);
+        self.watch_window_order();
+        self.keep_panel_on_top();
         if active && !self.reenforce_timer.running() {
             let me = self.me.clone();
             self.reenforce_timer.start(slint::TimerMode::Repeated, Duration::from_secs(2), move || {
@@ -660,9 +698,9 @@ impl App {
     /// the shortcut editor, next to that shortcut.)
     fn refresh_status(&self) {
         let tip = match self.pins.pinned().len() {
-            0 => "PinIt".to_string(),
-            1 => "PinIt: 1 window pinned".to_string(),
-            n => format!("PinIt: {n} windows pinned"),
+            0 => "TackHere".to_string(),
+            1 => "TackHere: 1 window pinned".to_string(),
+            n => format!("TackHere: {n} windows pinned"),
         };
         host::set_tray_tip(&tip);
     }
@@ -749,7 +787,7 @@ impl App {
             edit("Pin / unpin window", &s.toggle_pin),
             edit("Increase opacity", &s.opacity_up),
             edit("Decrease opacity", &s.opacity_down),
-            edit("Show / hide PinIt", &s.toggle_window),
+            edit("Show / hide TackHere", &s.toggle_window),
         ]);
         if let Some(ui) = self.ui() {
             ui.set_shortcut_error("".into());
@@ -773,7 +811,7 @@ impl App {
                 })
             })
             .collect();
-        let names = ["Pin / unpin window", "Increase opacity", "Decrease opacity", "Show / hide PinIt"];
+        let names = ["Pin / unpin window", "Increase opacity", "Decrease opacity", "Show / hide TackHere"];
         for (s, name) in strings.iter().zip(names) {
             match shortcuts::parse(s) {
                 Some((mods, _)) if shortcuts::has_safe_modifier(mods) => {}

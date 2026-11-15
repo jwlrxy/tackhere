@@ -1,8 +1,11 @@
+// Modified for TackHere by jwlrxy (2026).
 //! pins — which windows are pinned, and keeping them that way.
 //!
 //! Pure bookkeeping over `win`: no UI, no timers. The app calls `reenforce`
 //! on a timer and when the foreground window changes, and saves whatever
 //! `saved()` returns.
+
+use windows::Win32::Foundation::E_ACCESSDENIED;
 
 use crate::store::SavedPin;
 use crate::win::{self, Hwnd};
@@ -14,10 +17,10 @@ pub struct Pinned {
     pub process: String,
     pub opacity: i32, // percent
     pub click_through: bool,
-    was_layered: bool,       // had WS_EX_LAYERED before PinIt touched it
+    was_layered: bool,       // had WS_EX_LAYERED before TackHere touched it
     was_topmost: bool,       // was already always-on-top (Task Manager, players)
     was_click_through: bool, // already let clicks through
-    opacity_changed: bool,   // PinIt changed its opacity, so undo that on unpin
+    opacity_changed: bool,   // TackHere changed its opacity, so undo that on unpin
 }
 
 #[derive(Debug, PartialEq)]
@@ -25,7 +28,8 @@ pub enum PinError {
     NoWindow,
     Gone,
     NotPinnable,
-    Blocked(String),
+    AccessDenied(String),
+    NotApplied(String),
     NotPinned,
 }
 
@@ -35,9 +39,12 @@ impl PinError {
             PinError::NoWindow => "No window to pin. Click a window first.".into(),
             PinError::Gone => "That window no longer exists.".into(),
             PinError::NotPinnable => "That window can't be pinned.".into(),
-            PinError::Blocked(app) => {
+            PinError::AccessDenied(app) | PinError::NotApplied(app) => {
                 let app = if app.is_empty() { "this window" } else { app };
-                format!("Can't pin {app}. It may be running as administrator.")
+                match self {
+                    PinError::AccessDenied(_) => format!("Windows denied access to {app}."),
+                    _ => format!("Windows could not keep {app} on top."),
+                }
             }
             PinError::NotPinned => "Pin this window first to change its opacity.".into(),
         }
@@ -48,7 +55,7 @@ impl PinError {
 pub struct Reenforced {
     pub list_changed: bool,
     pub titles_changed: bool,
-    pub restored: Vec<Hwnd>,
+    pub raised: Vec<Hwnd>,
 }
 
 #[derive(Default)]
@@ -79,7 +86,7 @@ impl Pins {
         self.pinned.iter_mut().find(|p| p.hwnd == hwnd)
     }
 
-    pub fn pin(&mut self, hwnd: Hwnd) -> Result<(), PinError> {
+    fn pin(&mut self, hwnd: Hwnd, below: Option<Hwnd>) -> Result<(), PinError> {
         if self.is_pinned(hwnd) {
             return Ok(());
         }
@@ -87,16 +94,28 @@ impl Pins {
             return Err(PinError::Gone);
         }
         if !win::is_pinnable(hwnd) {
-            return Err(PinError::NotPinnable); // desktop, taskbar, Start, PinIt
+            return Err(PinError::NotPinnable); // desktop, taskbar, Start, TackHere
         }
         let title = win::window_title(hwnd);
         let process = win::process_name(hwnd);
         let was_topmost = win::is_topmost(hwnd);
-        // UIPI silently ignores SetWindowPos on elevated windows; checking that
-        // the style took is how we notice.
-        if !win::apply_topmost(hwnd) || !win::is_topmost(hwnd) {
-            crate::logfile::warning!("Pin failed for {process} (likely elevated/UIPI)");
-            return Err(PinError::Blocked(process));
+        match win::apply_topmost(hwnd, below) {
+            Ok(()) if win::is_topmost(hwnd) => {}
+            Ok(()) => {
+                crate::logfile::warning!(
+                    "SetWindowPos succeeded for {process} ({}), but the window is not topmost",
+                    win::class_name(hwnd)
+                );
+                return Err(PinError::NotApplied(process));
+            }
+            Err(error) => {
+                crate::logfile::warning!("SetWindowPos failed for {process}: {error}");
+                return Err(if error.code() == E_ACCESSDENIED {
+                    PinError::AccessDenied(process)
+                } else {
+                    PinError::NotApplied(process)
+                });
+            }
         }
         crate::logfile::info!("Pinned a window of {process}");
         let was_click_through = win::is_click_through(hwnd);
@@ -115,7 +134,7 @@ impl Pins {
         Ok(())
     }
 
-    /// Give a window back the way PinIt found it. False if it has closed.
+    /// Give a window back the way TackHere found it. False if it has closed.
     fn release(p: &Pinned) -> bool {
         if !win::is_valid_window(p.hwnd) {
             return false;
@@ -150,14 +169,14 @@ impl Pins {
     }
 
     /// Ok(true) = now pinned, Ok(false) = now unpinned.
-    pub fn toggle(&mut self, hwnd: Hwnd) -> Result<bool, PinError> {
+    pub fn toggle(&mut self, hwnd: Hwnd, below: Option<Hwnd>) -> Result<bool, PinError> {
         if hwnd == 0 {
             return Err(PinError::NoWindow);
         }
         if self.unpin(hwnd).is_some() {
             return Ok(false);
         }
-        self.pin(hwnd).map(|_| true)
+        self.pin(hwnd, below).map(|_| true)
     }
 
     pub fn set_opacity(&mut self, hwnd: Hwnd, percent: i32) -> Result<i32, PinError> {
@@ -195,7 +214,7 @@ impl Pins {
     /// Windows 11 sometimes drops the topmost flag; put it back, sweep out
     /// closed windows, follow title changes, and pin a pending window that has
     /// just opened.
-    pub fn reenforce(&mut self) -> Reenforced {
+    pub fn reenforce(&mut self, below: Option<Hwnd>) -> Reenforced {
         let mut out = Reenforced::default();
         // While Windows is closing every app, a window disappearing is not the
         // user closing it; dropping its pin would lose it across the restart.
@@ -207,8 +226,8 @@ impl Pins {
         out.list_changed = self.pinned.len() != before;
 
         for p in &mut self.pinned {
-            if !win::is_topmost(p.hwnd) {
-                win::apply_topmost(p.hwnd);
+            if !win::is_topmost(p.hwnd) && win::apply_topmost(p.hwnd, below).is_ok() {
+                out.raised.push(p.hwnd);
             }
             let title = win::window_title(p.hwnd);
             if !title.is_empty() && title != p.title {
@@ -223,8 +242,7 @@ impl Pins {
         if !self.pending.is_empty() && fg != 0 && !self.is_pinned(fg) && win::is_pinnable(fg) {
             let (title, process) = (win::window_title(fg), win::process_name(fg));
             if let Some(saved) = self.pending.iter().find(|s| s.matches(&process, &title)).cloned() {
-                if self.apply_saved(fg, &saved) {
-                    out.restored.push(fg);
+                if self.apply_saved(fg, &saved, below) {
                     out.list_changed = true;
                 }
             }
@@ -232,11 +250,11 @@ impl Pins {
         out
     }
 
-    fn apply_saved(&mut self, hwnd: Hwnd, saved: &SavedPin) -> bool {
-        if self.pin(hwnd).is_err() {
+    fn apply_saved(&mut self, hwnd: Hwnd, saved: &SavedPin, below: Option<Hwnd>) -> bool {
+        if self.pin(hwnd, below).is_err() {
             return false;
         }
-        // After a crash the window still carries PinIt's changes from last
+        // After a crash the window still carries TackHere's changes from last
         // time, which pin() just recorded as the app's own. The saved flags
         // know better.
         if let Some(p) = self.find(hwnd) {
@@ -255,14 +273,14 @@ impl Pins {
     }
 
     /// At startup: re-pin saved windows that are open; the rest wait for
-    /// their window (PinIt usually starts before the apps after a reboot).
+    /// their window (TackHere usually starts before the apps after a reboot).
     pub fn restore(&mut self, saved: Vec<SavedPin>) -> Vec<Hwnd> {
         self.pending = saved.clone();
         let live = win::enumerate_windows();
         let mut restored = Vec::new();
         for s in &saved {
             if let Some(w) = live.iter().find(|w| !self.is_pinned(w.hwnd) && s.matches(&w.process, &w.title)) {
-                if self.apply_saved(w.hwnd, s) {
+                if self.apply_saved(w.hwnd, s, None) {
                     restored.push(w.hwnd);
                 }
             }

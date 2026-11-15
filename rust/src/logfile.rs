@@ -1,10 +1,11 @@
-//! logfile — a small diagnostic log at %LOCALAPPDATA%\PinIt\pinit.log, in the
+// Modified for TackHere by jwlrxy (2026).
+//! logfile — a small diagnostic log at %LOCALAPPDATA%\TackHere\tackhere.log, in the
 //! Qt build's format, so user-reported problems can be looked into.
 //!
 //! Only process names go in, never window titles: a title can carry a
 //! document name, a mail subject or a chat message.
 //!
-//! Once the file passes 512 KB it becomes pinit.log.old and a fresh one
+//! Once the file passes 512 KB it becomes tackhere.log.old and a fresh one
 //! starts; the older .old is dropped.
 
 use std::fmt;
@@ -21,7 +22,7 @@ static LOCK: Mutex<()> = Mutex::new(());
 pub fn init() {
     let dir = crate::store::data_dir();
     let _ = std::fs::create_dir_all(&dir);
-    let _ = PATH.set(dir.join("pinit.log"));
+    let _ = PATH.set(dir.join("tackhere.log"));
 
     // A panic aborts the process (panic = "abort"), so this is the only
     // chance to record where it happened.
@@ -81,16 +82,16 @@ mod tests {
 
     #[test]
     fn one_line_per_entry() {
-        assert_eq!(format_line("T", 'I', "PinIt starting"), "T [I] PinIt starting\r\n");
+        assert_eq!(format_line("T", 'I', "TackHere starting"), "T [I] TackHere starting\r\n");
         assert_eq!(format_line("T", 'F', "panicked at x:\nboom\n"), "T [F] panicked at x: boom\r\n");
     }
 
     #[test]
     fn rotates_past_the_limit() {
-        let dir = std::env::temp_dir().join(format!("pinit-log-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tackhere-log-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let log = dir.join("pinit.log");
-        let old = dir.join("pinit.log.old");
+        let log = dir.join("tackhere.log");
+        let old = dir.join("tackhere.log.old");
         std::fs::write(&old, "older").unwrap();
 
         std::fs::write(&log, "12345").unwrap();

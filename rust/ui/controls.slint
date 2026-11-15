@@ -1,4 +1,5 @@
-// PinIt's own controls, drawn from the Theme so they look the same on
+// Modified for TackHere by jwlrxy (2026).
+// TackHere's own controls, drawn from the Theme so they look the same on
 // Windows 10 and 11 and in both colour modes. Each one takes keyboard focus,
 // shows a focus ring, and tells screen readers what it is.
 
@@ -8,13 +9,15 @@ export component Glyph inherits Path {
     in property <string> icon;
     in property <color> color: Theme.text;
     in property <length> size: 16px;
+    in property <bool> filled;
     commands: icon;
     width: size;
     height: size;
     viewbox-width: 24;
     viewbox-height: 24;
-    fill: transparent;
-    stroke: color;
+    fill: filled ? color : transparent;
+    fill-rule: evenodd;
+    stroke: filled ? transparent : color;
     stroke-width: 1.9px;
     stroke-line-cap: round;
 }
@@ -30,6 +33,7 @@ export component Button {
     in property <length> font-size: Theme.small;
     in property <string> tooltip;
     in property <length> icon-size: text == "" ? 14px : 13px;
+    in property <bool> icon-filled;
     callback clicked;
 
     out property <bool> has-hover: touch.has-hover;
@@ -67,6 +71,7 @@ export component Button {
                 y: (parent.height - self.height) / 2;
                 icon: root.icon;
                 size: root.icon-size;
+                filled: root.icon-filled;
                 color: !enabled ? Theme.text-subtle
                     : kind == ButtonKind.primary ? Theme.on-accent
                     : kind == ButtonKind.danger-ghost && (touch.has-hover || focus.has-focus) ? Theme.danger
@@ -374,7 +379,7 @@ export component KeyCombo {
                 font-size: Theme.tiny;
                 color: Theme.text-subtle;
             }
-            KeyCap { text: key; }
+            KeyCap { y: (parent.height - self.height) / 2; text: key; }
         }
         if alt-key != "": Text {
             text: "/";
@@ -382,7 +387,7 @@ export component KeyCombo {
             font-size: Theme.tiny;
             color: Theme.text-subtle;
         }
-        if alt-key != "": KeyCap { text: alt-key; }
+        if alt-key != "": KeyCap { y: (parent.height - self.height) / 2; text: alt-key; }
     }
 }
 

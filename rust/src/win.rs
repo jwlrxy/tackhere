@@ -1,11 +1,12 @@
-//! win — the Win32 calls PinIt makes on other apps' windows.
+// Modified for TackHere by jwlrxy (2026).
+//! win — the Win32 calls TackHere makes on other apps' windows.
 //!
 //! Everything that touches a foreign HWND lives here, so the rest of the app
 //! deals in plain `Hwnd` values and never needs `unsafe`.
 
 use std::mem::size_of;
 
-use windows::Win32::Foundation::{CloseHandle, COLORREF, HWND, LPARAM, RECT, TRUE, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, COLORREF, HWND, LPARAM, POINT, RECT, TRUE, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_CAPTION_COLOR, DWMWA_CLOAKED,
     DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_USE_IMMERSIVE_DARK_MODE,
@@ -14,13 +15,12 @@ use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject, BITMAPINFO,
     BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
 };
-use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
 use windows::Win32::System::Threading::{
     GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{BOOL, PCWSTR, PWSTR};
+use windows::core::{BOOL, PWSTR};
 
 /// A window handle as a plain number, so it can be stored, compared, hashed
 /// and sent across threads.
@@ -85,6 +85,16 @@ pub fn foreground_window() -> Hwnd {
     unsafe { GetForegroundWindow().0 as Hwnd }
 }
 
+/// The top-level window containing the screen point, if TackHere can pin it.
+pub fn window_at(point: POINT) -> Option<Hwnd> {
+    let target = unsafe { GetAncestor(WindowFromPoint(point), GA_ROOT) };
+    if target == unsafe { GetDesktopWindow() } {
+        return None;
+    }
+    let hwnd = target.0 as Hwnd;
+    crate::host::markers::target_of(hwnd).or_else(|| is_pinnable(hwnd).then_some(hwnd))
+}
+
 pub fn is_valid_window(hwnd: Hwnd) -> bool {
     hwnd != 0 && unsafe { IsWindow(Some(h(hwnd))).as_bool() }
 }
@@ -109,6 +119,13 @@ pub fn is_layered(hwnd: Hwnd) -> bool {
 
 pub fn is_click_through(hwnd: Hwnd) -> bool {
     ex_style(hwnd) & WS_EX_TRANSPARENT.0 != 0
+}
+
+pub fn is_cloaked(hwnd: HWND) -> bool {
+    let mut cloaked = 0u32;
+    unsafe {
+        DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, (&mut cloaked as *mut u32).cast(), size_of::<u32>() as u32).is_ok() && cloaked != 0
+    }
 }
 
 pub fn class_name(hwnd: Hwnd) -> String {
@@ -146,6 +163,7 @@ pub fn is_shell_class(class: &str) -> bool {
         "TopLevelWindowForOverflowXamlIsland", // tray overflow (Windows 11)
         "Windows.UI.Core.CoreWindow",          // Start, Search, Action Center
         "XamlExplorerHostIslandWindow",        // Task View / Alt+Tab (Windows 11)
+        "XamlExplorerHostIslandWindow_WASDK",  // newer Windows 11 shell host
         "MultitaskingViewFrame",               // Task View / Alt+Tab (Windows 10)
         "TaskListThumbnailWnd",                // taskbar thumbnails
         "ForegroundStaging",                   // shell focus hand-off helper
@@ -160,22 +178,48 @@ pub fn is_pinnable(hwnd: Hwnd) -> bool {
     let mut pid = 0u32;
     unsafe { GetWindowThreadProcessId(h(hwnd), Some(&mut pid)) };
     if pid == unsafe { GetCurrentProcessId() } {
-        return false; // PinIt's own windows
+        return false; // TackHere's own windows
     }
     !is_shell_class(&class_name(hwnd))
 }
 
-pub fn apply_topmost(hwnd: Hwnd) -> bool {
+pub fn visible_above(hwnd: Hwnd, matches: impl Fn(Hwnd) -> bool) -> bool {
+    let mut window = h(hwnd);
     unsafe {
-        SetWindowPos(h(hwnd), Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
-            .is_ok()
+        while let Ok(above) = GetWindow(window, GW_HWNDPREV) {
+            if matches(above.0 as Hwnd) && IsWindowVisible(above).as_bool()
+                && !IsIconic(above).as_bool() && !is_cloaked(above)
+            {
+                return true;
+            }
+            window = above;
+        }
+    }
+    false
+}
+
+pub fn apply_topmost(hwnd: Hwnd, below: Option<Hwnd>) -> windows::core::Result<()> {
+    // Explorer can accept the call without making its window topmost if
+    // Windows is also allowed to reorder the owner.
+    unsafe {
+        SetWindowPos(
+            h(hwnd),
+            Some(below.map(h).unwrap_or(HWND_TOPMOST)),
+            0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+        )
     }
 }
 
 pub fn remove_topmost(hwnd: Hwnd) -> bool {
     unsafe {
-        SetWindowPos(h(hwnd), Some(HWND_NOTOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
-            .is_ok()
+        SetWindowPos(
+            h(hwnd),
+            Some(HWND_NOTOPMOST),
+            0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+        )
+        .is_ok()
     }
 }
 
@@ -200,7 +244,7 @@ pub fn set_click_through(hwnd: Hwnd, enabled: bool) -> bool {
 }
 
 /// Undo `set_opacity_percent`. `keep_layered`: the window was layered before
-/// PinIt touched it (it manages its own transparency), so leave its style.
+/// TackHere touched it (it manages its own transparency), so leave its style.
 pub fn restore_opacity(hwnd: Hwnd, keep_layered: bool) {
     unsafe {
         let _ = SetLayeredWindowAttributes(h(hwnd), COLORREF(0), 255, LWA_ALPHA);
@@ -230,7 +274,7 @@ pub struct WindowInfo {
 }
 
 /// Real application windows, front to back: visible, not cloaked, not tool
-/// windows, not the shell, not PinIt.
+/// windows, not the shell, not TackHere.
 pub fn enumerate_windows() -> Vec<WindowInfo> {
     unsafe extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> BOOL {
         unsafe {
@@ -241,14 +285,7 @@ pub fn enumerate_windows() -> Vec<WindowInfo> {
             if GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0 != 0 {
                 return TRUE;
             }
-            let mut cloaked = 0u32;
-            let cloak = DwmGetWindowAttribute(
-                hwnd,
-                DWMWA_CLOAKED,
-                &mut cloaked as *mut _ as *mut _,
-                size_of::<u32>() as u32,
-            );
-            if cloak.is_ok() && cloaked != 0 {
+            if is_cloaked(hwnd) {
                 return TRUE;
             }
             out.push(hwnd.0 as Hwnd);
@@ -379,16 +416,7 @@ pub fn animations_enabled() -> bool {
     enabled.as_bool()
 }
 
-/// A soft bundled "tick" rather than the system ding. SND_ASYNC reads the
-/// buffer after this returns, which a `'static` slice allows.
-pub fn play_pin_sound() {
-    static TICK: &[u8] = include_bytes!("../../resources/tick.wav");
-    unsafe {
-        let _ = PlaySoundW(PCWSTR(TICK.as_ptr() as *const u16), None, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
-    }
-}
-
-/// Make PinIt's own title bar match its theme: dark caption buttons in dark
+/// Make TackHere's own title bar match its theme: dark caption buttons in dark
 /// mode, and (Windows 11) the caption painted in the window's own colour.
 pub fn style_title_bar(hwnd: Hwnd, dark: bool, caption_rgb: u32) {
     unsafe {
@@ -411,7 +439,7 @@ pub fn style_title_bar(hwnd: Hwnd, dark: bool, caption_rgb: u32) {
     }
 }
 
-/// Bring one of PinIt's own windows to the front, even when another app has
+/// Bring one of TackHere's own windows to the front, even when another app has
 /// the focus (a second launch, the tray, the show/hide hotkey).
 pub fn force_foreground(hwnd: Hwnd) {
     unsafe {

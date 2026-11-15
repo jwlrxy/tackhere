@@ -1,15 +1,16 @@
+# Modified for TackHere by jwlrxy (2026).
 [package]
-name = "pinit"
-version = "3.0.0"
+name = "tackhere"
+version = "1.0.0"
 description = "Keep any window always on top on Windows"
-authors = ["Saqlain Abbas <saqlainrazee@gmail.com>"]
+authors = ["jwlrxy", "Saqlain Abbas <saqlainrazee@gmail.com>"]
 license = "Apache-2.0"
-repository = "https://github.com/Razee4315/Pin-It"
+repository = "https://github.com/jwlrxy/tackhere"
 edition = "2024"
 rust-version = "1.88"
 
 [dependencies]
-# - No Slint tray icon: PinIt drives the tray itself (it needs balloon
+# - No Slint tray icon: TackHere drives the tray itself (it needs balloon
 #   notifications and the Explorer-restart message).
 # - Software renderer only: for one small window it draws just as well, uses
 #   a fraction of the memory of OpenGL (no GPU driver loaded), and avoids a
@@ -23,6 +24,7 @@ slint = { version = "1.18", default-features = false, features = [
     "raw-window-handle-06",
 ] }
 raw-window-handle = "0.6"
+resvg = { version = "0.48", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

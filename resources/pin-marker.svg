@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" role="img" aria-label="置顶图钉">
+  <desc>Perspective reference: DeskPins pin bitmap by Elias Fotinis, https://github.com/PhilLab/deskpins/blob/master/res/pin.bmp</desc>
+  <!-- Original DeskPins artwork © 2002–2015 Elias Fotinis, MIT. This rendition is newly drawn. -->
+  <path fill="#343A47" stroke="#343A47" stroke-width="0.31" stroke-linecap="round" stroke-linejoin="round" d="M 0.950,14.720 Q 1.285,13.833 1.768,13.178 L 4.868,10.123 5.809,11.133 2.483,13.988 Q 1.584,14.594 0.950,14.720 Z"/>
+  <path fill="none" stroke="#939DAB" stroke-width="0.31" stroke-linecap="round" stroke-linejoin="round" d="M 1.557,13.949 L 4.006,11.501"/>
+  <path fill="#EA5046" stroke="#70232B" stroke-width="0.63" stroke-linecap="round" stroke-linejoin="round" d="M 3.510,12.333 C 1.723,10.417 1.738,7.559 3.478,5.936 C 4.356,5.117 5.158,5.669 6.360,5.477 C 7.234,5.359 8.126,4.747 8.661,4.001 L 12.181,7.775 C 11.247,8.372 10.710,9.174 10.545,10.039 C 10.328,11.184 10.723,12.033 9.889,12.810 C 8.156,14.427 5.297,14.249 3.510,12.333 Z"/>
+  <path fill="#BC333A" d="M 4.789,12.986 C 6.538,13.953 8.409,13.657 9.664,12.583 C 10.400,11.951 9.981,11.002 10.277,9.824 C 10.482,9.003 11.106,8.148 11.668,7.856 L 10.980,7.118 C 9.923,8.184 9.140,9.353 9.160,10.386 C 9.190,11.972 7.125,13.365 4.789,12.986 Z"/>
+  <path fill="none" stroke="#FF9182" stroke-width="0.61" stroke-linecap="round" stroke-linejoin="round" d="M 3.080,9.233 C 2.858,8.100 3.319,6.864 4.238,6.281"/>
+  <path fill="#AA2A35" stroke="#70232B" stroke-width="0.62" stroke-linecap="round" stroke-linejoin="round" d="M 12.761,3.706 C 14.268,5.321 14.402,7.645 13.061,8.895 C 11.720,10.146 9.412,9.850 7.905,8.234 C 6.399,6.619 6.264,4.295 7.605,3.045 C 8.946,1.794 11.255,2.090 12.761,3.706 Z"/>
+  <path fill="#EF5448" stroke="#79262C" stroke-width="0.56" stroke-linecap="round" stroke-linejoin="round" d="M 13.288,3.215 C 14.795,4.830 14.929,7.154 13.588,8.404 C 12.247,9.655 9.938,9.359 8.432,7.743 C 6.925,6.127 6.791,3.804 8.132,2.554 C 9.473,1.303 11.781,1.599 13.288,3.215 Z"/>
+  <path fill="none" stroke="#FF9E93" stroke-width="0.68" stroke-linecap="round" stroke-linejoin="round" d="M 7.887,4.710 C 7.990,3.574 9.003,2.520 10.064,2.324"/>
+</svg>

@@ -1,9 +1,12 @@
-// Windows resources for PinIt: the exe icon, file metadata (Properties ->
+// Modified for TackHere by jwlrxy (2026).
+// Windows resources for TackHere: the exe icon, file metadata (Properties ->
 // Details) and the application manifest. build.rs fills in the @PLACEHOLDERS@:
 // the version from Cargo.toml, and absolute paths to the icon and manifest.
 #include <windows.h>
 
 1 ICON "@ICON@"
+2 CURSOR "@PIN_CURSOR@"
+3 CURSOR "@UNPIN_CURSOR@"
 1 RT_MANIFEST "@MANIFEST@"
 
 VS_VERSION_INFO VERSIONINFO
@@ -19,13 +22,13 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName",      "Saqlain Abbas"
-            VALUE "FileDescription",  "PinIt - keep any window always on top"
+            VALUE "CompanyName",      "TackHere contributors"
+            VALUE "FileDescription",  "TackHere - keep any window always on top"
             VALUE "FileVersion",      "@VERSION@"
-            VALUE "InternalName",     "PinIt"
+            VALUE "InternalName",     "TackHere"
             VALUE "LegalCopyright",   "Copyright (C) Saqlain Abbas. Apache-2.0."
-            VALUE "OriginalFilename", "PinIt.exe"
-            VALUE "ProductName",      "PinIt"
+            VALUE "OriginalFilename", "TackHere.exe"
+            VALUE "ProductName",      "TackHere"
             VALUE "ProductVersion",   "@VERSION@"
         END
     END
