@@ -1,7 +1,7 @@
 # Modified for TackHere by jwlrxy (2026).
 [package]
 name = "tackhere"
-version = "1.0.2"
+version = "1.0.3"
 description = "Keep any window always on top on Windows"
 authors = ["jwlrxy", "Saqlain Abbas <saqlainrazee@gmail.com>"]
 license = "Apache-2.0"

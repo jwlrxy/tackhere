@@ -78,17 +78,19 @@ type Shared = Rc<RefCell<App>>;
 fn main() {
     logfile::init();
     logfile::info!("TackHere {} starting", env!("CARGO_PKG_VERSION"));
-    if host::hand_off_to_running_instance() {
-        logfile::info!("Another instance is running; asked it to show");
+    let start_hidden = std::env::args().any(|a| a == "--minimized");
+    if host::hand_off_to_running_instance(!start_hidden) {
+        if start_hidden {
+            logfile::info!("TackHere is already running; sign-in launch stays in the tray");
+        } else {
+            logfile::info!("Another instance is running; asked it to show");
+        }
         return;
     }
-    let start_hidden = std::env::args().any(|a| a == "--minimized");
 
     let ui = AppWindow::new().expect("could not create the TackHere window");
     let (state, first_launch) = store::load();
-    if first_launch && !autostart::is_enabled() && !autostart::set_enabled(true) {
-        logfile::warning!("Could not enable tray startup on first launch");
-    }
+    autostart::initialize(first_launch);
     let app: Shared = Rc::new_cyclic(|me| RefCell::new(App {
         me: me.clone(),
         ui: ui.as_weak(),

@@ -4,6 +4,7 @@
 //! installer can switch autostart on too, so a flag in pinned.json would
 //! drift out of step).
 
+use windows::Win32::Foundation::ERROR_FILE_NOT_FOUND;
 use windows::Win32::System::Registry::{
     RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ,
 };
@@ -15,10 +16,33 @@ fn value_name() -> HSTRING {
 
 const RUN_KEY: windows::core::PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 
-pub fn is_enabled() -> bool {
+fn registered_command() -> Option<String> {
+    let name = value_name();
     let mut size = 0u32;
     unsafe {
-        RegGetValueW(HKEY_CURRENT_USER, RUN_KEY, &value_name(), RRF_RT_REG_SZ, None, None, Some(&mut size)).is_ok()
+        RegGetValueW(HKEY_CURRENT_USER, RUN_KEY, &name, RRF_RT_REG_SZ, None, None, Some(&mut size)).ok().ok()?;
+        let mut buffer = vec![0u16; (size as usize).div_ceil(2)];
+        RegGetValueW(HKEY_CURRENT_USER, RUN_KEY, &name, RRF_RT_REG_SZ, None,
+            Some(buffer.as_mut_ptr().cast()), Some(&mut size)).ok().ok()?;
+        String::from_utf16(&buffer[..buffer.iter().position(|&c| c == 0)?]).ok()
+    }
+}
+
+fn launch_command() -> Option<String> {
+    let executable = std::env::current_exe().ok()?;
+    Some(format!("\"{}\" --minimized", executable.display()))
+}
+
+pub fn is_enabled() -> bool {
+    launch_command().zip(registered_command()).is_some_and(|(expected, actual)| {
+        actual.eq_ignore_ascii_case(&expected)
+    })
+}
+
+/// Keep a previously enabled setting working when the portable EXE moves.
+pub fn initialize(first_launch: bool) {
+    if !is_enabled() && (first_launch || registered_command().is_some()) && !set_enabled(true) {
+        crate::logfile::warning!("Could not register the silent sign-in command");
     }
 }
 
@@ -27,10 +51,9 @@ pub fn set_enabled(enabled: bool) -> bool {
     unsafe {
         if !enabled {
             let r = RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, &value_name());
-            return r.is_ok() || !is_enabled();
+            return r.is_ok() || r == ERROR_FILE_NOT_FOUND;
         }
-        let Ok(exe) = std::env::current_exe() else { return false };
-        let command = format!("\"{}\" --minimized", exe.display());
+        let Some(command) = launch_command() else { return false };
         let wide: Vec<u16> = command.encode_utf16().chain(std::iter::once(0)).collect();
         RegSetKeyValueW(
             HKEY_CURRENT_USER,
@@ -40,6 +63,6 @@ pub fn set_enabled(enabled: bool) -> bool {
             Some(wide.as_ptr() as *const _),
             (wide.len() * 2) as u32,
         )
-        .is_ok()
+        .is_ok() && is_enabled()
     }
 }

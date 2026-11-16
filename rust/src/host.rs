@@ -135,9 +135,9 @@ fn class_name() -> HSTRING {
     HSTRING::from(format!("TackHereHost{}", crate::instance_suffix()))
 }
 
-/// Another TackHere is already running in this session: ask it to show itself.
+/// With an existing instance, show the window only for an interactive launch.
 /// Returns true if this process should exit.
-pub fn hand_off_to_running_instance() -> bool {
+pub fn hand_off_to_running_instance(show_window: bool) -> bool {
     let name = HSTRING::from(format!("TackHere_SingleInstance_v2{}", crate::instance_suffix()));
     unsafe {
         // Kept for the life of the process; the installer uses it as AppMutex.
@@ -146,7 +146,7 @@ pub fn hand_off_to_running_instance() -> bool {
             std::mem::forget(mutex);
             return false;
         }
-        if let Ok(other) = FindWindowW(&class_name(), PCWSTR::null()) {
+        if show_window && let Ok(other) = FindWindowW(&class_name(), PCWSTR::null()) {
             let mut pid = 0;
             GetWindowThreadProcessId(other, Some(&mut pid));
             let _ = AllowSetForegroundWindow(pid);
