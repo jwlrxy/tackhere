@@ -48,6 +48,7 @@ pub enum Event {
 
 const WM_TRAY: u32 = WM_APP + 1;
 const WM_SHOW_REQUEST: u32 = WM_APP + 2;
+const WM_MARKER_TARGET_CHANGED: u32 = WM_APP + 3;
 const TRAY_ID: u32 = 1;
 const NIN_KEYSELECT: u32 = NIN_SELECT | 1;
 
@@ -108,6 +109,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 }
             }
             WM_SHOW_REQUEST => emit(Event::ShowRequested, false),
+            WM_MARKER_TARGET_CHANGED => {
+                markers::target_changed(wp.0 as Hwnd);
+                return LRESULT(0);
+            }
             WM_QUERYENDSESSION => {
                 emit(Event::SessionEnding, true);
                 return LRESULT(1);

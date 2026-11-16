@@ -1,6 +1,6 @@
 //! Native buttons attached to the visible top edge of pinned windows.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::mem::size_of;
 use std::time::{Duration, Instant};
 
@@ -12,6 +12,7 @@ use windows::Win32::Graphics::Gdi::{
     DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, w};
@@ -19,7 +20,7 @@ use windows::core::{PCWSTR, w};
 use resvg::{tiny_skia, usvg};
 
 use crate::win::{self, Hwnd};
-use super::{Event, emit};
+use super::{Event, WM_MARKER_TARGET_CHANGED, emit, host};
 
 const CLASS: PCWSTR = w!("TackHerePinMarker");
 const SEAT_MS: u64 = 125;
@@ -41,7 +42,7 @@ thread_local! {
     ).expect("valid embedded marker SVG");
     static MARKERS: RefCell<Vec<Marker>> = const { RefCell::new(Vec::new()) };
     static TIMER: slint::Timer = slint::Timer::default();
-    static INTERVAL: Cell<u64> = const { Cell::new(0) };
+    static GEOMETRY_HOOKS: RefCell<Vec<HWINEVENTHOOK>> = const { RefCell::new(Vec::new()) };
 }
 
 #[derive(Clone, Copy)]
@@ -273,25 +274,40 @@ impl Marker {
         let y = rest_y - padding - (distance * SHAFT_Y).round() as i32;
         let frame = (x, y, side, padding, alpha);
         if self.last_frame != Some(frame) {
-            if self.surface.as_ref().is_none_or(|s| s.side != side || s.padding != padding) {
-                self.surface = Surface::new(side, padding);
-            }
-            let Some(surface) = self.surface.as_ref() else {
-                self.hide();
-                return true;
-            };
-            let blend = BLENDFUNCTION {
-                BlendOp: AC_SRC_OVER as u8,
-                BlendFlags: 0,
-                SourceConstantAlpha: alpha,
-                AlphaFormat: AC_SRC_ALPHA as u8,
-            };
-            unsafe {
-                if UpdateLayeredWindow(
-                    self.hwnd, None, Some(&POINT { x, y }),
-                    Some(&SIZE { cx: side, cy: side }), Some(surface.dc),
-                    Some(&POINT::default()), COLORREF(0), Some(&blend), ULW_ALPHA,
-                ).is_err() {
+            let position_only = self.last_frame.is_some_and(|(_, _, old_side, old_padding, old_alpha)| {
+                (side, padding, alpha) == (old_side, old_padding, old_alpha)
+            });
+            if position_only {
+                // Move the existing layered surface during a drag. Its pixels have not changed.
+                let moved = unsafe {
+                    SetWindowPos(self.hwnd, None, x, y, 0, 0,
+                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSENDCHANGING)
+                };
+                if moved.is_err() {
+                    return true;
+                }
+            } else {
+                if self.surface.as_ref().is_none_or(|s| s.side != side || s.padding != padding) {
+                    self.surface = Surface::new(side, padding);
+                }
+                let Some(surface) = self.surface.as_ref() else {
+                    self.hide();
+                    return true;
+                };
+                let blend = BLENDFUNCTION {
+                    BlendOp: AC_SRC_OVER as u8,
+                    BlendFlags: 0,
+                    SourceConstantAlpha: alpha,
+                    AlphaFormat: AC_SRC_ALPHA as u8,
+                };
+                let drawn = unsafe {
+                    UpdateLayeredWindow(
+                        self.hwnd, None, Some(&POINT { x, y }),
+                        Some(&SIZE { cx: side, cy: side }), Some(surface.dc),
+                        Some(&POINT::default()), COLORREF(0), Some(&blend), ULW_ALPHA,
+                    )
+                };
+                if drawn.is_err() {
                     return true;
                 }
             }
@@ -379,32 +395,81 @@ pub fn sync(targets: &[Hwnd], below: Option<Hwnd>) {
     refresh();
 }
 
-fn refresh() {
-    let now = Instant::now();
-    let interval = MARKERS.with(|markers| {
-        let mut markers = markers.borrow_mut();
-        markers.retain_mut(|m| m.update(now));
-        if markers.is_empty() {
-            0
-        } else if markers.iter().any(|m| !matches!(m.motion, Motion::Rest)) {
-            16
-        } else {
-            80
-        }
+unsafe extern "system" fn on_target_event(
+    _: HWINEVENTHOOK, _: u32, hwnd: HWND, object: i32, child: i32, _: u32, _: u32,
+) {
+    if hwnd.0.is_null() || object != OBJID_WINDOW.0 || child != 0 {
+        return;
+    }
+    let target = hwnd.0 as Hwnd;
+    let tracked = MARKERS.with(|markers| {
+        markers.try_borrow().ok().is_none_or(|markers| markers.iter().any(|m| m.target == target))
     });
-    if INTERVAL.with(|old| old.replace(interval)) != interval {
-        TIMER.with(|timer| {
-            if interval == 0 {
-                timer.stop();
-            } else {
-                timer.start(slint::TimerMode::Repeated, Duration::from_millis(interval), refresh);
-            }
-        });
+    if tracked {
+        // Queue this outside the hook so native operations cannot re-enter a marker update.
+        unsafe {
+            let _ = PostMessageW(Some(host()), WM_MARKER_TARGET_CHANGED, WPARAM(target as usize), LPARAM(0));
+        }
     }
 }
 
+fn watch_targets(active: bool) {
+    GEOMETRY_HOOKS.with(|hooks| {
+        let mut hooks = hooks.borrow_mut();
+        unsafe {
+            if active && hooks.is_empty() {
+                for (first, last) in [
+                    (EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE),
+                    (EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE),
+                    (EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED),
+                    (EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND),
+                    (EVENT_SYSTEM_MOVESIZEEND, EVENT_SYSTEM_MOVESIZEEND),
+                ] {
+                    let hook = SetWinEventHook(first, last, None, Some(on_target_event), 0, 0,
+                        WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+                    if !hook.is_invalid() {
+                        hooks.push(hook);
+                    }
+                }
+            } else if !active {
+                for hook in hooks.drain(..) {
+                    let _ = UnhookWinEvent(hook);
+                }
+            }
+        }
+    });
+}
+
+fn update_tracking() {
+    let (active, animating) = MARKERS.with(|markers| {
+        let markers = markers.borrow();
+        (!markers.is_empty(), markers.iter().any(|m| !matches!(m.motion, Motion::Rest)))
+    });
+    watch_targets(active);
+    TIMER.with(|timer| {
+        if animating && !timer.running() {
+            timer.start(slint::TimerMode::Repeated, Duration::from_millis(16), refresh);
+        } else if !animating {
+            timer.stop();
+        }
+    });
+}
+
+pub(super) fn target_changed(target: Hwnd) {
+    let now = Instant::now();
+    MARKERS.with(|markers| {
+        markers.borrow_mut().retain_mut(|marker| marker.target != target || marker.update(now));
+    });
+    update_tracking();
+}
+
+fn refresh() {
+    let now = Instant::now();
+    MARKERS.with(|markers| markers.borrow_mut().retain_mut(|marker| marker.update(now)));
+    update_tracking();
+}
+
 pub fn clear() {
-    TIMER.with(|t| t.stop());
-    INTERVAL.with(|i| i.set(0));
     MARKERS.with(|m| m.borrow_mut().clear());
+    update_tracking();
 }
