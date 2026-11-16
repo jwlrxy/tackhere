@@ -1,5 +1,5 @@
 // Modified for TackHere by jwlrxy (2026).
-//! autostart — "Start TackHere with Windows", kept where Windows itself reads
+//! autostart — "Start in the system tray at sign-in", kept where Windows itself reads
 //! it: the per-user Run key. The registry is the single source of truth (the
 //! installer can switch autostart on too, so a flag in pinned.json would
 //! drift out of step).

@@ -85,7 +85,10 @@ fn main() {
     let start_hidden = std::env::args().any(|a| a == "--minimized");
 
     let ui = AppWindow::new().expect("could not create the TackHere window");
-    let state = store::load();
+    let (state, first_launch) = store::load();
+    if first_launch && !autostart::is_enabled() && !autostart::set_enabled(true) {
+        logfile::warning!("Could not enable tray startup on first launch");
+    }
     let app: Shared = Rc::new_cyclic(|me| RefCell::new(App {
         me: me.clone(),
         ui: ui.as_weak(),

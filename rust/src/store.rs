@@ -79,7 +79,6 @@ pub struct Settings {
     pub stay_on_top: bool,
     pub show_notifications: bool,
     pub has_seen_tray_notice: bool,
-    pub start_with_windows: bool,
     pub shortcuts: Shortcuts,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -91,7 +90,6 @@ impl Default for Settings {
             stay_on_top: false,
             show_notifications: false,
             has_seen_tray_notice: false,
-            start_with_windows: false,
             shortcuts: Shortcuts::default(),
             extra: Map::new(),
         }
@@ -149,10 +147,14 @@ fn file() -> PathBuf {
     data_dir().join("pinned.json")
 }
 
-pub fn load() -> State {
+/// Load preferences and report whether no profile has been created yet.
+pub fn load() -> (State, bool) {
     let path = file();
-    let Ok(bytes) = std::fs::read(&path) else { return State::default() };
-    match serde_json::from_slice(&bytes) {
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => return (State::default(), error.kind() == std::io::ErrorKind::NotFound),
+    };
+    let state = match serde_json::from_slice(&bytes) {
         Ok(state) => state,
         Err(e) => {
             // Keep the broken file for a look later: the next save would
@@ -161,7 +163,8 @@ pub fn load() -> State {
             let _ = std::fs::rename(&path, data_dir().join("pinned.json.corrupt"));
             State::default()
         }
-    }
+    };
+    (state, false)
 }
 
 /// Write via a temporary file and rename, so a crash or power cut mid-write

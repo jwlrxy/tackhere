@@ -628,7 +628,7 @@ export component AppWindow inherits Window {
                 toggled(on) => { root.setting-changed("notifications", on); }
             }
             CheckBox {
-                text: "Start TackHere with Windows";
+                text: "Start in the system tray at sign-in";
                 checked <=> root.autostart;
                 toggled(on) => { root.setting-changed("autostart", on); }
             }

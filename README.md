@@ -8,7 +8,7 @@ TackHere adds a pushpin to a Windows window so it stays visible while you work. 
 
 [**Download TackHere.exe**](https://github.com/jwlrxy/tackhere/releases/latest/download/TackHere.exe) · [Release notes](https://github.com/jwlrxy/tackhere/releases)
 
-For Windows x64. Run the downloaded EXE directly. TackHere lives in the system tray.
+For Windows x64. Run the downloaded EXE directly. On first launch, TackHere enables tray startup at sign-in. You can change it in Settings.
 
 ![TackHere on Windows with a pinned window listed](docs/tackhere-window.png)
 

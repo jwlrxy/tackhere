@@ -7,7 +7,7 @@
 
 [**直接下载 TackHere.exe**](https://github.com/jwlrxy/tackhere/releases/latest/download/TackHere.exe) · [版本说明](https://github.com/jwlrxy/tackhere/releases)
 
-面向 64 位 Windows。下载后打开 `TackHere.exe` 即可使用。程序驻留在系统托盘。
+面向 Windows x64。下载后打开 `TackHere.exe` 即可使用。首次运行默认开启登录时从托盘启动，也可以在设置里关闭。
 
 ![TackHere 在 Windows 上的主界面](docs/tackhere-window.png)
 
